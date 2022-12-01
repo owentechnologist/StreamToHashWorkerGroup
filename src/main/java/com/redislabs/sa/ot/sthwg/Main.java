@@ -16,7 +16,7 @@ import java.util.*;
  * mvn compile exec:java -Dexec.cleanupDaemonThreads=false
  * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100"
  * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100 --host 192.168.1.1 -port 12000 --username gerard --password &pTRsFE$E"
- *  *
+ * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 50 --processeachread 10 --blocktimeeachread 10000"
  */
 public class Main {
     static String host = "localhost";
@@ -26,8 +26,11 @@ public class Main {
     static URI jedisURI = null;
     static ConnectionHelper connectionHelper = null;
     static String streamKeyName = "foodOrderStream";
+    static String hashPrefix = "foodOrder:";
     static int howManyEntriesToWrite = 10;
-
+    static boolean shouldCleanHashes = false;
+    static int howManyEntriesToProcessEachRead = 1; // how many entries to pull from the stream in each read
+    static int blockTimeForEachRead = 20000; //how long to block and wait for another entry to appear in the stream
 
     public static void main(String [] args){
         if(args.length>0) {
@@ -52,6 +55,18 @@ public class Main {
                 int index = argList.indexOf("--howmany");
                 howManyEntriesToWrite = Integer.parseInt(argList.get(index + 1));
             }
+            if (argList.contains("--processeachread")) {
+                int index = argList.indexOf("--processeachread");
+                howManyEntriesToProcessEachRead = Integer.parseInt(argList.get(index + 1));
+            }
+            if (argList.contains("--blocktimeeachread")) {
+                int index = argList.indexOf("--blocktimeeachread");
+                blockTimeForEachRead = Integer.parseInt(argList.get(index + 1));
+            }
+            if (argList.contains("--cleanhashes")) {
+                int index = argList.indexOf("--cleanhashes");
+                shouldCleanHashes = Boolean.parseBoolean(argList.get(index + 1));
+            }
 
         }
         HostAndPort hnp = new HostAndPort(host,port);
@@ -66,12 +81,29 @@ public class Main {
         }catch(URISyntaxException use){use.printStackTrace();System.exit(1);}
         connectionHelper = new ConnectionHelper(jedisURI);
         testJedisConnection(jedisURI);
+        if(shouldCleanHashes){
+            cleanUpHashes(hashPrefix);
+        }
         writeToStream(streamKeyName,howManyEntriesToWrite);
         createConsumerGroup(streamKeyName);
         consumeStreamAsWorker(streamKeyName);
     }
 
+    static void cleanUpHashes(String keyPrefix){
+        JedisPooled jedis = connectionHelper.getPooledJedis();
+        String luaCleanup = "local cursor = 0 local keyNum = 0 repeat " +
+                    "local res = redis.call('scan',cursor,'MATCH',KEYS[1]..'*') " +
+                    "if(res ~= nil and #res>=0) then cursor = tonumber(res[1]) " +
+                    "local ks = res[2] if(ks ~= nil and #ks>0) then " +
+                    "for i=1,#ks,1 do " +
+                    "local key = tostring(ks[i]) " +
+                    "redis.call('UNLINK',key) end " +
+                    "keyNum = keyNum + #ks end end until( cursor <= 0 ) return keyNum";
+        jedis.eval(luaCleanup,1,keyPrefix);
+    }
+
     static void writeToStream(String streamKeyName,int howManyEvents){
+        System.out.println("Writing "+howManyEvents+" entries to the stream");
         Pipeline jedisConnection = connectionHelper.getPipeline();
         for(int x=0;x<howManyEvents;x++) {
             HashMap<String, String> orderData = FakeOrdersStreamEntryBuilder.getFakeOrderHashMap();
@@ -91,23 +123,31 @@ public class Main {
         }catch(JedisDataException jde){System.out.println("Group Already Exists -- continuing on...");}
     }
 
+    //It would be expected normally to have a separate service that kicks off the workers
+    //Here we just start up a single worker - each worker gets its own ID
     static void consumeStreamAsWorker(String streamKeyName){
         JedisPooled jedis = connectionHelper.getPooledJedis();
         HashMap<String,StreamEntryID> streamEntryIDHashMap = new HashMap<>();
         streamEntryIDHashMap.put(streamKeyName,StreamEntryID.UNRECEIVED_ENTRY);
         for(int x=0;x<10;x++) {
-            List<Map.Entry<String, List<StreamEntry>>> s = jedis.xreadGroup("workers", "1", XReadGroupParams.xReadGroupParams(), streamEntryIDHashMap);
+            XReadGroupParams xReadGroupParams = XReadGroupParams.xReadGroupParams()
+                    .count(howManyEntriesToProcessEachRead)
+                    .block(blockTimeForEachRead);
+            List<Map.Entry<String, List<StreamEntry>>> s =
+                    jedis.xreadGroup("workers", "1", xReadGroupParams, streamEntryIDHashMap);
             if(null!=s) {
                 Map.Entry<String, List<StreamEntry>> w = s.get(0);
                 String streamKey = w.getKey();
-                System.out.println("while processing streamEvents --> thing called streamKey == " + streamKey);
+                System.out.println("Processing up to "+howManyEntriesToProcessEachRead+" non-null streamEvents --> Events came from: " + streamKey);
                 List<StreamEntry> uu = w.getValue();
                 for (StreamEntry se : uu) {
                     StreamEntryID childKey = se.getID();
-                    jedis.hset("foodOrder:" + childKey.toString(), se.getFields());
+                    jedis.hset(hashPrefix + childKey.toString(), se.getFields());
+                    jedis.xack(streamKey,"workers",childKey);
                 }
             }else{
-                System.out.println("All entries processed as of this moment...");
+                System.out.println("No more entries to process as of this moment...  \n" +
+                        "I guess I will loop around and wait "+blockTimeForEachRead+" milliseconds in case an event happens...");
             }
         }
     }
