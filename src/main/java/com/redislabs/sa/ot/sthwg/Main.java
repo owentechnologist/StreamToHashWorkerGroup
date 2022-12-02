@@ -15,7 +15,7 @@ import java.util.*;
 /**
  * mvn compile exec:java -Dexec.cleanupDaemonThreads=false
  * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100"
- * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100 --host 192.168.1.1 -port 12000 --username gerard --password &pTRsFE$E"
+ * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100 --host 192.168.1.1 -port 12000 --user gerard --password &pTRsFE$E"
  * mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 50 --processeachread 10 --blocktimeeachread 10000"
  */
 public class Main {
@@ -43,8 +43,8 @@ public class Main {
                 int portIndex = argList.indexOf("--port");
                 port = Integer.parseInt(argList.get(portIndex + 1));
             }
-            if (argList.contains("--username")) {
-                int userNameIndex = argList.indexOf("--username");
+            if (argList.contains("--user")) {
+                int userNameIndex = argList.indexOf("--user");
                 username = argList.get(userNameIndex + 1);
             }
             if (argList.contains("--password")) {
@@ -205,7 +205,7 @@ class ConnectionHelper{
             String password = uri.getAuthority().split(":")[1];
             System.out.println("\n\nUsing user: "+user+" / password @@@@@@@@@@");
             clientConfig = DefaultJedisClientConfig.builder().user(user).password(password)
-                    .connectionTimeoutMillis(30000).build(); // timeout and client settings
+                    .connectionTimeoutMillis(30000).timeoutMillis(120000).build(); // timeout and client settings
 
         }else {
             clientConfig = DefaultJedisClientConfig.builder()

@@ -17,7 +17,7 @@ mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 
 
 Here is an example of passing in user and password and alternate host and port:
 ```
-mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100 --host 192.168.1.1 -port 12000 --username gerard --password &pTRsFE$E"
+mvn compile exec:java -Dexec.cleanupDaemonThreads=false  -Dexec.args="--howmany 100 --host 192.168.1.1 -port 12000 --user gerard --password &pTRsFE$E"
 ```
 
 You can also change 
